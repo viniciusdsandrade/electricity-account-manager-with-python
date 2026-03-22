@@ -23,6 +23,12 @@ class EconomicConfig:
         return self.ratio_reais / self.ratio_kwh
 
 
+@dataclass(frozen=True)
+class GeminiConfig:
+    api_key: str | None = None
+    model: str = "gemini-3-flash-preview"
+
+
 DEFAULT_BILL_PDF = Path(
     "/home/andrade/Desktop/electricity-account-manager-with-python/energy-bill/fatura-dezembro-2025.pdf"
 )
