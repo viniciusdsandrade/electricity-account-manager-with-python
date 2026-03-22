@@ -148,3 +148,153 @@ class CpflPdfParser:
             injected_kwh=int(inj) if inj is not None else None,
             source_pdf=pdf_path.name,
         )
+
+    # ------------------------------------------------------------------
+    # Bill detail extraction helpers
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _parse_reading_dates(cls, text: str) -> tuple[dt.date, dt.date, int]:
+        pat = re.compile(
+            r"\d{7}\s+(?P<end>\d{2}/\d{2}/\d{4})\s+(?P<start>\d{2}/\d{2}/\d{4})\s+(?P<days>\d{1,3})"
+        )
+        m = pat.search(text)
+        if not m:
+            raise ValueError("Não consegui extrair datas de leitura do PDF.")
+        end = dt.datetime.strptime(m.group("end"), "%d/%m/%Y").date()
+        start = dt.datetime.strptime(m.group("start"), "%d/%m/%Y").date()
+        days = int(m.group("days"))
+        return start, end, days
+
+    @classmethod
+    def _parse_tariff_line(cls, text: str, label_pattern: str) -> tuple[float, float, float]:
+        pat = re.compile(
+            label_pattern
+            + r"\s+KWH\s+(?P<qty>\d+[.,]\d+)\s+(?P<taneel>\d+[.,]\d+)\s+(?P<ttax>\d+[.,]\d+)\s+(?P<charge>\d+[.,]\d+)-?",
+            re.IGNORECASE,
+        )
+        matches = list(pat.finditer(text.upper()))
+        if not matches:
+            return 0.0, 0.0, 0.0
+        taneel = cls._parse_ptbr_decimal(matches[0].group("taneel"))
+        ttax = cls._parse_ptbr_decimal(matches[0].group("ttax"))
+        total = sum(cls._parse_ptbr_decimal(m.group("charge")) for m in matches)
+        return taneel, ttax, total
+
+    @classmethod
+    def _parse_tax_rates(cls, text: str) -> tuple[float, float, float]:
+        t = text.upper()
+        icms_m = re.search(r"ICMS\s+[\d.,]+\s+(?P<rate>\d+[.,]\d+)\s+[\d.,]+", t)
+        icms = cls._parse_ptbr_decimal(icms_m.group("rate")) if icms_m else 18.0
+
+        pis_m = re.search(r"(?P<rate>\d+[.,]\d+)%\s+\d+[.,]\d+%", t)
+        cofins_m = re.search(r"\d+[.,]\d+%\s+(?P<rate>\d+[.,]\d+)%", t)
+        pis = cls._parse_ptbr_decimal(pis_m.group("rate")) if pis_m else 0.0
+        cofins = cls._parse_ptbr_decimal(cofins_m.group("rate")) if cofins_m else 0.0
+        return icms, pis, cofins
+
+    @classmethod
+    def _parse_other_charges(cls, text: str) -> tuple[float, float]:
+        t = text.upper()
+        cip_pat = re.compile(
+            r"CONTRIBUIÇÃO\s+CUSTEIO\s+IP-CIP\s+\w+/\d+\s+(?P<val>\d+[.,]\d+)"
+        )
+        cip_matches = cip_pat.findall(t)
+        cip = cls._parse_ptbr_decimal(cip_matches[-1]) if cip_matches else 0.0
+
+        other = 0.0
+        # Prior-month CIP entries (all except the last one) count as other charges
+        for val_str in cip_matches[:-1]:
+            other += cls._parse_ptbr_decimal(val_str)
+        for label in [r"CONTA\s+MÊS\s+ANTERIOR", r"JUROS\s+DE\s+MORA",
+                      r"MULTA\s+POR\s+ATRASO\s+PGTO", r"ATUALIZAÇÃO\s+MONETÁRIA"]:
+            m = re.search(label + r"\s+\w+/\d+\s+(?P<val>\d+[.,]\d+)", t)
+            if m:
+                other += cls._parse_ptbr_decimal(m.group("val"))
+        return cip, other
+
+    @classmethod
+    def _parse_total_billed(cls, text: str) -> float:
+        m = re.search(r"R\$\s*(?P<val>\d+[.,]\d+)", text)
+        if not m:
+            raise ValueError("Não consegui extrair o valor total da fatura.")
+        return cls._parse_ptbr_decimal(m.group("val"))
+
+    @classmethod
+    def _parse_energy_balance(cls, text: str) -> float:
+        m = re.search(
+            r"SALDO\s+EM\s+ENERGIA\s+DA\s+INSTALA[CÇ][AÃ]O.*?(?P<val>\d+[.,]\d+)\s*KWH",
+            text.upper(),
+        )
+        return cls._parse_ptbr_decimal(m.group("val")) if m else 0.0
+
+    @classmethod
+    def parse_bill_details(cls, pdf_path: Path) -> BillDetails:
+        text = cls.extract_text(pdf_path)
+        month = cls.parse_reference_month(text)
+        mon_abbr, mon_token, yy = cls._month_token(month)
+
+        reading_start, reading_end, reading_days = cls._parse_reading_dates(text)
+
+        cons, inj_compensated = cls.parse_consumed_injected(text, month)
+        if cons is None:
+            raise ValueError(f"Não consegui extrair consumo do PDF: {pdf_path}")
+
+        # Injected total from meter readings line
+        inj_meter_pat = re.compile(
+            r"ENERGIA\s+INJETADA\s+ÚNICO\s+\d+\s+\d+\s+[\d.,]+\s+(?P<val>\d+)",
+            re.IGNORECASE,
+        )
+        inj_meter_m = inj_meter_pat.search(text.upper())
+        injected_total = int(inj_meter_m.group("val")) if inj_meter_m else (inj_compensated or 0)
+
+        compensated = inj_compensated or 0
+        minimum_charge = cons - compensated if compensated > 0 else cons
+
+        tusd_aneel, tusd_tax, tusd_charge = cls._parse_tariff_line(
+            text, rf"CONSUMO\s+USO\s+SISTEMA\s*\[KWH\]-TUSD\s+{re.escape(mon_token)}"
+        )
+        te_aneel, te_tax, te_charge = cls._parse_tariff_line(
+            text, rf"CONSUMO\s+-\s+TE\s+{re.escape(mon_token)}"
+        )
+        tusd2_aneel, tusd2_tax, tusd_inj_credit = cls._parse_tariff_line(
+            text, rf"ENERGIA\s+ATIVA\s+INJETADA\s+TUSD2\s+{re.escape(mon_token)}"
+        )
+        _, te_inj_tax, te_inj_credit = cls._parse_tariff_line(
+            text, rf"ENERGIA\s+ATIVA\s+INJETADA\s+TE\s+{re.escape(mon_token)}"
+        )
+
+        icms, pis, cofins = cls._parse_tax_rates(text)
+        cip, other = cls._parse_other_charges(text)
+        total = cls._parse_total_billed(text)
+        balance = cls._parse_energy_balance(text)
+
+        return BillDetails(
+            month=month,
+            source_pdf=pdf_path.name,
+            reading_start=reading_start,
+            reading_end=reading_end,
+            reading_days=reading_days,
+            consumption_kwh=cons,
+            injected_kwh=injected_total,
+            compensated_kwh=compensated,
+            minimum_charge_kwh=minimum_charge,
+            energy_balance_kwh=balance,
+            tariff_tusd=tusd_aneel,
+            tariff_te=te_aneel,
+            tariff_tusd2_inj=tusd2_aneel,
+            tariff_tusd_with_tax=tusd_tax,
+            tariff_te_with_tax=te_tax,
+            tariff_tusd2_inj_with_tax=tusd2_tax,
+            tariff_te_inj_with_tax=te_inj_tax,
+            icms_rate=icms,
+            pis_rate=pis,
+            cofins_rate=cofins,
+            tusd_charge=tusd_charge,
+            te_charge=te_charge,
+            tusd_inj_credit=tusd_inj_credit,
+            te_inj_credit=te_inj_credit,
+            cip_charge=cip,
+            other_charges=other,
+            total_billed=total,
+        )
