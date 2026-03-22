@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
-import pandas as pd
+from dotenv import load_dotenv
 
 from config import (
     DEFAULT_BILL_PDF,
@@ -12,20 +13,21 @@ from config import (
     DEFAULT_OUT_PDF,
     DEFAULT_SOLAR_CSV,
     EconomicConfig,
+    GeminiConfig,
     PathsConfig,
 )
 
 # Garante que ./src esteja no sys.path para importar módulos internos.
-# Isso evita precisar rodar com PYTHONPATH=src.
 SRC_DIR = Path(__file__).resolve().parent / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from usecases.generate_report import generate_monthly_report  # noqa: E402
 from report.pdf_writer import PdfReportWriter  # noqa: E402
+from ai.gemini import generate_insights  # noqa: E402
 
 
-def parse_args() -> tuple[PathsConfig, EconomicConfig]:
+def parse_args() -> tuple[PathsConfig, EconomicConfig, GeminiConfig]:
     parser = argparse.ArgumentParser(
         description="Compara produção solar (CSV) vs consumo (PDF CPFL) e gera relatório mensal (kWh e R$) em CSV e PDF."
     )
@@ -64,6 +66,11 @@ def parse_args() -> tuple[PathsConfig, EconomicConfig]:
         default=str(DEFAULT_OUT_PDF),
         help=f"Arquivo de saída PDF. Default: {DEFAULT_OUT_PDF}",
     )
+    parser.add_argument(
+        "--gemini-api-key",
+        default=None,
+        help="API key do Gemini. Fallback: variável de ambiente GEMINI_API_KEY.",
+    )
 
     args = parser.parse_args()
 
@@ -75,18 +82,35 @@ def parse_args() -> tuple[PathsConfig, EconomicConfig]:
     )
     economic = EconomicConfig(ratio_kwh=float(args.ratio_kwh), ratio_reais=float(args.ratio_reais))
 
-    return paths, economic
+    api_key = args.gemini_api_key or os.environ.get("GEMINI_API_KEY")
+    gemini = GeminiConfig(api_key=api_key)
+
+    return paths, economic, gemini
 
 
 def main() -> None:
-    paths, economic = parse_args()
+    load_dotenv()
+    paths, economic, gemini = parse_args()
 
-    report = generate_monthly_report(paths, economic)
+    report = generate_monthly_report(paths, economic, gemini)
+
+    # Insights
+    short_insights = generate_insights(report, gemini, detailed=False)
+    detailed_insights = generate_insights(report, gemini, detailed=True)
+
+    if short_insights:
+        print("\n--- Análise Inteligente ---")
+        print(short_insights)
+        print("---\n")
 
     paths.out_csv.parent.mkdir(parents=True, exist_ok=True)
     report.to_csv(paths.out_csv, index=False, encoding="utf-8-sig")
 
-    PdfReportWriter.write(report, paths.out_pdf, title="Relatório Mensal de Energia (Produção vs Consumo)")
+    PdfReportWriter.write(
+        report, paths.out_pdf,
+        title="Relatório Mensal de Energia (Produção vs Consumo)",
+        insights_text=detailed_insights,
+    )
 
     print(report.to_string(index=False))
     print(f"\nOK: CSV salvo em {paths.out_csv}")
