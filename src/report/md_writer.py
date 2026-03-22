@@ -18,6 +18,94 @@ def _fmt_date(d) -> str:
     return d.strftime("%d/%m/%Y")
 
 
+def _generate_insights(r: VerificationReport) -> list[str]:
+    """Gera insights explicativos a partir dos dados da verificação."""
+    b = r.bill
+    s = r.solar
+    insights = []
+
+    energia_bruta = b.tusd_charge + b.te_charge
+    credito_total = b.tusd_inj_credit + b.te_inj_credit
+    subtotal_energia = energia_bruta - credito_total
+
+    # --- Custo mínimo bifásico ---
+    custo_minimo = round(b.minimum_charge_kwh * (b.tariff_tusd_with_tax + b.tariff_te_with_tax), 2)
+    insights.append(
+        f"**1. Taxa mínima bifásica — {_fmt_r(custo_minimo)}**\n\n"
+        f"Por lei, você sempre paga por {b.minimum_charge_kwh} kWh independente de quanto injeta "
+        f"(custo de disponibilidade). Dos {b.consumption_kwh} kWh consumidos da rede, "
+        f"só {b.compensated_kwh} puderam ser compensados ({b.consumption_kwh} - {b.minimum_charge_kwh})."
+    )
+
+    # --- Assimetria tarifária ---
+    assimetria = round(subtotal_energia - custo_minimo, 2)
+    if assimetria > 0.01:
+        insights.append(
+            f"**2. Assimetria de tarifas — {_fmt_r(assimetria)}**\n\n"
+            f"A compensação não é 1:1 em valor. A tarifa TUSD que você paga pelo consumo "
+            f"({_fmt_ptbr(b.tariff_tusd_with_tax, 5)}/kWh) é maior que a tarifa TUSD2 que "
+            f"você recebe pela injeção ({_fmt_ptbr(b.tariff_tusd2_inj_with_tax, 5)}/kWh). "
+            f"Isso é efeito do Marco Legal da GD (Lei 14.300/2022) — a distribuidora cobra "
+            f"mais pelo uso da rede do que credita.\n\n"
+            f"Na prática, pelos {b.compensated_kwh} kWh compensados:\n"
+            f"- Você pagou: {_fmt_r(energia_bruta)} (TUSD + TE)\n"
+            f"- Recebeu de crédito: -{_fmt_r(credito_total)} (TUSD2 + TE)\n"
+            f"- Sobrou {_fmt_r(subtotal_energia)} só de energia"
+        )
+
+    # --- CIP + débitos ---
+    extras = b.cip_charge + b.other_charges
+    partes_extras = []
+    if b.cip_charge > 0:
+        partes_extras.append(f"CIP (iluminação pública): {_fmt_r(b.cip_charge)} — sempre cobrado, não compensável")
+    if b.other_charges > 0:
+        partes_extras.append(f"Débitos anteriores (conta anterior, juros, multa, etc.): {_fmt_r(b.other_charges)}")
+
+    if partes_extras:
+        n = 3 if assimetria > 0.01 else 2
+        insights.append(
+            f"**{n}. CIP + Débitos anteriores — {_fmt_r(extras)}**\n\n"
+            + "\n".join(f"- {p}" for p in partes_extras)
+        )
+
+    # --- Resumo final ---
+    sem_debitos = round(b.total_billed - b.other_charges, 2)
+    custo_energia_puro = round(subtotal_energia, 2)
+
+    resumo = (
+        f"\n**Resumo da composição:**\n\n"
+        f"| Componente | Valor |\n"
+        f"|---|---|\n"
+        f"| Energia líquida ({b.minimum_charge_kwh} kWh mín + assimetria tarifária) | {_fmt_r(custo_energia_puro)} |\n"
+        f"| CIP (iluminação pública) | {_fmt_r(b.cip_charge)} |\n"
+    )
+    if b.other_charges > 0:
+        resumo += f"| Débitos anteriores + multa/juros | {_fmt_r(b.other_charges)} |\n"
+    resumo += f"| **Total** | **{_fmt_r(b.total_billed)}** |\n"
+
+    resumo += (
+        f"\nSem os débitos anteriores ({_fmt_r(b.other_charges)}), a fatura seria "
+        f"**{_fmt_r(sem_debitos)}**. E desse valor, {_fmt_r(b.cip_charge)} é CIP (inevitável). "
+        f"O custo real de energia foi **{_fmt_r(custo_energia_puro)}** — basicamente o preço "
+        f"da taxa mínima ({b.minimum_charge_kwh} kWh) inflado pela assimetria entre tarifa de "
+        f"consumo e tarifa de injeção. "
+    )
+
+    if r.energy_status == "SUPERAVIT":
+        resumo += (
+            f"O sistema solar está fazendo o trabalho dele, mas o Marco Legal garante que "
+            f"a distribuidora sempre receba pelo uso da rede."
+        )
+    elif r.energy_status == "DEFICIT":
+        resumo += (
+            f"O consumo superou a produção solar — considere revisar hábitos de consumo "
+            f"ou avaliar a capacidade do sistema fotovoltaico."
+        )
+
+    insights.append(resumo)
+    return insights
+
+
 def format_terminal(r: VerificationReport) -> str:
     b = r.bill
     s = r.solar
@@ -58,6 +146,14 @@ def format_terminal(r: VerificationReport) -> str:
         lines.append("OK Fatura confere (divergência dentro da tolerância de R$ 0,05)")
     else:
         lines.append(f"ATENÇÃO Divergência de {_fmt_r(r.total_divergence)} detectada!")
+
+    lines.append("")
+    lines.append("--- Por que paguei mesmo com superávit solar? ---")
+    for insight in _generate_insights(r):
+        # Strip markdown bold for terminal
+        clean = insight.replace("**", "").replace("\n\n", "\n")
+        lines.append(clean)
+        lines.append("")
 
     return "\n".join(lines)
 
@@ -136,6 +232,10 @@ def write_markdown(r: VerificationReport, out_path: Path) -> None:
     avg = s.total_kwh / s.days if s.days else 0
     md += f"\n**Total período:** {_fmt_ptbr(s.total_kwh)} kWh em {s.days} dias\n"
     md += f"**Média diária:** {_fmt_ptbr(avg)} kWh/dia\n"
+
+    md += "\n## Análise — Por que paguei mesmo com superávit solar?\n\n"
+    for insight in _generate_insights(r):
+        md += insight + "\n\n"
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(md, encoding="utf-8")
