@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
 
@@ -11,6 +12,13 @@ import pandas as pd
 _DATE_LINE_RE = re.compile(
     r"^(?P<date>\d{4}\.\d{1,2}\.\d{1,2}),(?P<prod>-?\d+(?:\.\d+)?),(?P<cons>-?\d+(?:\.\d+)?),?\s*$"
 )
+
+
+@dataclass(frozen=True)
+class PeriodProduction:
+    total_kwh: float
+    days: int
+    daily_breakdown: tuple[tuple[dt.date, float], ...]
 
 
 class SolarCsvParser:
@@ -40,3 +48,19 @@ class SolarCsvParser:
         df = daily_df.copy()
         df["month"] = df["date"].apply(lambda d: f"{d.year:04d}-{d.month:02d}")
         return df.groupby("month", as_index=False)["production_kwh"].sum()
+
+    @staticmethod
+    def production_for_period(
+        daily_df: pd.DataFrame, start: dt.date, end: dt.date,
+    ) -> PeriodProduction:
+        mask = (daily_df["date"] >= start) & (daily_df["date"] <= end)
+        filtered = daily_df[mask].sort_values("date")
+        breakdown = tuple(
+            (row["date"], float(row["production_kwh"]))
+            for _, row in filtered.iterrows()
+        )
+        return PeriodProduction(
+            total_kwh=round(float(filtered["production_kwh"].sum()), 2),
+            days=len(filtered),
+            daily_breakdown=breakdown,
+        )
