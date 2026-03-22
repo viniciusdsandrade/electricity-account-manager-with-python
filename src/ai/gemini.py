@@ -79,3 +79,46 @@ def parse_bill_text(text: str, source_pdf: str, config: GeminiConfig) -> BillRec
     except Exception as e:
         warnings.warn(f"Gemini parse falhou ({e}). Usando fallback regex.")
         return _regex_fallback(text, source_pdf)
+
+
+_INSIGHTS_SHORT_PROMPT = """\
+Você é um consultor de energia solar. Analise os dados abaixo e escreva um resumo curto \
+(2-3 frases) em português do Brasil, destacando: economia obtida, saldo energético \
+e se a produção solar foi suficiente para cobrir o consumo.
+Use formato monetário brasileiro (R$ X.XXX,XX) e separador decimal com vírgula.
+
+Dados do relatório:
+"""
+
+_INSIGHTS_DETAILED_PROMPT = """\
+Você é um consultor de energia solar. Analise os dados abaixo e escreva uma análise \
+detalhada em português do Brasil (1-2 parágrafos) contendo:
+- Comparação entre produção e consumo
+- Economia obtida e projeção de créditos
+- Recomendações práticas para o consumidor
+- Tendências observadas (se houver múltiplos meses)
+Use formato monetário brasileiro (R$ X.XXX,XX) e separador decimal com vírgula.
+
+Dados do relatório:
+"""
+
+
+def generate_insights(df: pd.DataFrame, config: GeminiConfig, detailed: bool = False) -> str:
+    """Generate energy insights using Gemini AI. Returns empty string on failure."""
+    client = _get_client(config)
+    if client is None:
+        warnings.warn("GEMINI_API_KEY não configurada. Insights indisponíveis.")
+        return ""
+
+    prompt = _INSIGHTS_DETAILED_PROMPT if detailed else _INSIGHTS_SHORT_PROMPT
+    df_text = df.to_string(index=False)
+
+    try:
+        response = client.models.generate_content(
+            model=config.model,
+            contents=prompt + df_text,
+        )
+        return response.text.strip()
+    except Exception as e:
+        warnings.warn(f"Gemini insights falhou ({e}). Relatório gerado sem análise.")
+        return ""
