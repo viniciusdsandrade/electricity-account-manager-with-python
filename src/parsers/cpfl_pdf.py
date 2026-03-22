@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,37 @@ class BillRecord:
     consumption_kwh: int
     injected_kwh: Optional[int]
     source_pdf: str
+
+
+@dataclass(frozen=True)
+class BillDetails:
+    month: str                    # "YYYY-MM"
+    source_pdf: str
+    reading_start: dt.date        # leitura anterior
+    reading_end: dt.date          # leitura atual
+    reading_days: int
+    consumption_kwh: int          # Energia Ativa consumida
+    injected_kwh: int             # Energia Injetada total (medidor)
+    compensated_kwh: int          # Energia compensada na fatura
+    minimum_charge_kwh: int       # Taxa mínima (bifásico=50)
+    energy_balance_kwh: float     # Saldo de energia da instalação
+    tariff_tusd: float
+    tariff_te: float
+    tariff_tusd2_inj: float       # TUSD2 for injected energy
+    tariff_tusd_with_tax: float
+    tariff_te_with_tax: float
+    tariff_tusd2_inj_with_tax: float
+    tariff_te_inj_with_tax: float
+    icms_rate: float
+    pis_rate: float
+    cofins_rate: float
+    tusd_charge: float            # Consumo TUSD
+    te_charge: float              # Consumo TE
+    tusd_inj_credit: float        # Crédito TUSD injetada
+    te_inj_credit: float          # Crédito TE injetada
+    cip_charge: float             # Contribuição CIP
+    other_charges: float          # Conta anterior + juros + multa + atualização
+    total_billed: float           # Total cobrado
 
 
 class CpflPdfParser:
