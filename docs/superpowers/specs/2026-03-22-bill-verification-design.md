@@ -6,15 +6,15 @@ Add a bill verification feature to the Electricity Account Manager that cross-re
 
 ## Decisions
 
-| Decision                    | Choice                                                                 |
-|-----------------------------|------------------------------------------------------------------------|
-| Architecture                | New usecase `verify_bill.py` + extended parser + new solar filter       |
-| Output format               | Terminal (formatted blocks) + Markdown file                            |
-| CLI integration             | `--verificar` flag on existing `cli.py`                                |
-| Solar period matching       | Exact metering period dates (not calendar month)                       |
-| Financial tolerance         | R$ 0,05 for rounding divergences                                      |
-| Minimum charge (bifásico)   | 50 kWh hardcoded (configurable later if needed)                        |
-| Existing code impact        | Additive only — BillRecord and current flow unchanged                  |
+| Decision                  | Choice                                                            |
+|---------------------------|-------------------------------------------------------------------|
+| Architecture              | New usecase `verify_bill.py` + extended parser + new solar filter |
+| Output format             | Terminal (formatted blocks) + Markdown file                       |
+| CLI integration           | `--verificar` flag on existing `cli.py`                           |
+| Solar period matching     | Exact metering period dates (not calendar month)                  |
+| Financial tolerance       | R$ 0,05 for rounding divergences                                  |
+| Minimum charge (bifásico) | 50 kWh hardcoded (configurable later if needed)                   |
+| Existing code impact      | Additive only — BillRecord and current flow unchanged             |
 
 ## Architecture
 
@@ -136,16 +136,16 @@ class VerificationReport:
 
 All new fields extracted via regex from the PDF text (same approach as existing `parse_consumed_injected`):
 
-| Field | Regex pattern target |
-|-------|---------------------|
-| Reading dates | `Leitura atual DD/MM/YYYY` and `Leitura anterior DD/MM/YYYY` or the date fields near `13/03/2026  11/02/2026  30` |
-| Tariffs | Table rows: `Consumo Uso Sistema...TUSD...kWh...314,0000...0,38815000...0,49923567...156,76` |
-| Compensated kWh | `Energia Ativa Injetada TUSD2...kWh...264,0000` |
-| Tax rates | `ICMS...18,00`, `PIS...0,91%`, `COFINS...4,27%` |
-| CIP | `Contribuição Custeio IP-CIP MAR/26...20,94` |
-| Other charges | Sum of: Conta Mês Anterior + Juros + Multa + Atualização |
-| Total | `Total a pagar R$ 173,93` or total consolidado row |
-| Energy balance | `Saldo em Energia da Instalação: Convencional 532,0000000000 kWh` |
+| Field           | Regex pattern target                                                                                              |
+|-----------------|-------------------------------------------------------------------------------------------------------------------|
+| Reading dates   | `Leitura atual DD/MM/YYYY` and `Leitura anterior DD/MM/YYYY` or the date fields near `13/03/2026  11/02/2026  30` |
+| Tariffs         | Table rows: `Consumo Uso Sistema...TUSD...kWh...314,0000...0,38815000...0,49923567...156,76`                      |
+| Compensated kWh | `Energia Ativa Injetada TUSD2...kWh...264,0000`                                                                   |
+| Tax rates       | `ICMS...18,00`, `PIS...0,91%`, `COFINS...4,27%`                                                                   |
+| CIP             | `Contribuição Custeio IP-CIP MAR/26...20,94`                                                                      |
+| Other charges   | Sum of: Conta Mês Anterior + Juros + Multa + Atualização                                                          |
+| Total           | `Total a pagar R$ 173,93` or total consolidado row                                                                |
+| Energy balance  | `Saldo em Energia da Instalação: Convencional 532,0000000000 kWh`                                                 |
 
 ## CLI integration
 
