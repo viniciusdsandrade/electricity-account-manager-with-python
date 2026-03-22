@@ -25,9 +25,11 @@ if str(SRC_DIR) not in sys.path:
 from usecases.generate_report import generate_monthly_report  # noqa: E402
 from report.pdf_writer import PdfReportWriter  # noqa: E402
 from ai.gemini import generate_insights  # noqa: E402
+from usecases.verify_bill import verify_bill  # noqa: E402
+from report.md_writer import format_terminal, write_markdown  # noqa: E402
 
 
-def parse_args() -> tuple[PathsConfig, EconomicConfig, GeminiConfig]:
+def parse_args() -> tuple[PathsConfig, EconomicConfig, GeminiConfig, bool]:
     parser = argparse.ArgumentParser(
         description="Compara produção solar (CSV) vs consumo (PDF CPFL) e gera relatório mensal (kWh e R$) em CSV e PDF."
     )
@@ -71,6 +73,12 @@ def parse_args() -> tuple[PathsConfig, EconomicConfig, GeminiConfig]:
         default=None,
         help="API key do Gemini. Fallback: variável de ambiente GEMINI_API_KEY.",
     )
+    parser.add_argument(
+        "--verificar",
+        action="store_true",
+        default=False,
+        help="Modo verificação: cruza fatura com produção solar e verifica valores.",
+    )
 
     args = parser.parse_args()
 
@@ -85,13 +93,36 @@ def parse_args() -> tuple[PathsConfig, EconomicConfig, GeminiConfig]:
     api_key = args.gemini_api_key or os.environ.get("GEMINI_API_KEY")
     gemini = GeminiConfig(api_key=api_key)
 
-    return paths, economic, gemini
+    return paths, economic, gemini, args.verificar
 
 
 def main() -> None:
     load_dotenv()
-    paths, economic, gemini = parse_args()
+    paths, economic, gemini, verificar = parse_args()
 
+    if verificar:
+        import datetime as dt
+        from parsers.cpfl_pdf import CpflPdfParser
+        from parsers.solar_csv import SolarCsvParser
+        import pandas as pd
+
+        bill = CpflPdfParser.parse_bill_details(paths.bill_pdfs[0])
+
+        daily_dfs = [SolarCsvParser.read_daily(p) for p in paths.solar_csvs]
+        daily = pd.concat(daily_dfs, ignore_index=True)
+        solar = SolarCsvParser.production_for_period(
+            daily, bill.reading_start, bill.reading_end,
+        )
+
+        report = verify_bill(bill, solar)
+        print(format_terminal(report))
+
+        out_md = Path("relatorio/verificacao") / f"{bill.month}.md"
+        write_markdown(report, out_md)
+        print(f"\nOK: Markdown salvo em {out_md}")
+        return
+
+    # existing report flow below (DO NOT MODIFY)
     report = generate_monthly_report(paths, economic, gemini)
 
     # Insights
