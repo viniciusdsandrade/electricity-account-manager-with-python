@@ -7,7 +7,7 @@ import pandas as pd
 
 class PdfReportWriter:
     @staticmethod
-    def write(report_df: pd.DataFrame, out_pdf: Path, title: str) -> None:
+    def write(report_df: pd.DataFrame, out_pdf: Path, title: str, insights_text: str = "") -> None:
         from reportlab.lib import colors
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.units import mm
@@ -220,5 +220,15 @@ class PdfReportWriter:
             )
         )
         story.append(t)
+
+        if insights_text:
+            story.append(Spacer(1, 14))
+            story.append(Paragraph("Análise Inteligente", styles["Heading2"]))
+            story.append(Spacer(1, 6))
+            for paragraph in insights_text.split("\n\n"):
+                paragraph = paragraph.strip()
+                if paragraph:
+                    story.append(Paragraph(paragraph, styles["Normal"]))
+                    story.append(Spacer(1, 4))
 
         doc.build(story)
