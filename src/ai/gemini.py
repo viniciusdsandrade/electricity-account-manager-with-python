@@ -11,7 +11,7 @@ from parsers.cpfl_pdf import BillRecord, CpflPdfParser
 
 def _get_client(config: GeminiConfig):
     """Create a Gemini client. Returns None if api_key is missing."""
-    if config.api_key is None:
+    if not config.api_key:
         return None
     from google import genai
     return genai.Client(api_key=config.api_key)
